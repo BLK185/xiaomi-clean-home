@@ -1,0 +1,17 @@
+/.cache/
+/.private/
+/backups/
+/dist/
+**/build/
+**/.gradle/
+**/local.properties
+**/__pycache__/
+*.pyc
+*.apk
+*.aab
+*.jks
+*.keystore
+*.p12
+.env
+*.log
+.DS_Store

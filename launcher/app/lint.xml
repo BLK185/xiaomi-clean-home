@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<lint>
+    <!-- Upstream translations are partial. Android deliberately falls back to the default
+         language for missing strings; keep this informational, without suppressing other checks. -->
+    <issue id="MissingTranslation" severity="informational" />
+</lint>

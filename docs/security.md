@@ -1,0 +1,13 @@
+# Sécurité et limites
+
+Le site photo écoute sur le réseau local en HTTPS, port 8765, uniquement lorsque l’écran de partage de la TV est ouvert. Il utilise TLS 1.2/1.3 et une clé EC générée dans AndroidKeyStore. Le certificat est local et auto-signé : comparer son empreinte sur la TV avant d’accepter l’exception du navigateur. Le chiffrement seul ne prouve pas l’identité du serveur sans cette vérification.
+
+L’autorisation se fait sur la TV, avec code et adresse du demandeur. Aucun mot de passe permanent n’est envoyé. Une seule demande ou session est admise ; le ticket de demande expire après deux minutes, les demandes sont espacées de quinze secondes. Le navigateur reçoit un identifiant aléatoire dans un cookie Secure, HttpOnly, SameSite=Strict, lié à son adresse IP, ainsi qu’un jeton CSRF. Les opérations modifiant les données vérifient l’origine et le jeton. L’inactivité ferme la session après quinze minutes, sa durée absolue est de deux heures. La fermeture de l’écran et la révocation détruisent la session en mémoire.
+
+Un navigateur autorisé peut administrer les photos et réglages : refuser les demandes inconnues. Plusieurs personnes utilisant le même profil de navigateur partagent sa session. Il ne s’agit pas d’une identification biométrique ou d’un compte nominatif. Un appareil compromis ou une personne contrôlant la télécommande peut accéder aux autorisations. Aucun accès Internet distant, relais cloud ou redirection de ports n’est nécessaire.
+
+L’installateur PC utilise ADB, qui donne un accès étendu pendant sa connexion. Il vérifie le profil, sauvegarde avant modification, confirme que le nouvel accueil fonctionne avant de désactiver les paquets et journalise chaque opération avant de l’exécuter. Une erreur d’installation déclenche une tentative de restauration. Si le réseau disparaît ou si le contrôle après redémarrage échoue, une intervention puis une restauration manuelle peuvent être nécessaires.
+
+Le profil ne supprime pas les applications système : il utilise les états utilisateur Android. Les composants indispensables à Cast, au réseau, aux autorisations, au clavier et aux mises à jour sont protégés. Aucun accès root ou privilège WRITE_SECURE_SETTINGS n’est accordé au launcher. L’installateur utilise temporairement les droits ADB pour sélectionner l’accueil et la veille.
+
+L’APK de release est signé ; son SHA-256 est fixé dans release-manifest.json. Python Windows est téléchargé depuis python.org avec un SHA-256 fixé ; ADB vient en HTTPS du site officiel Google. La vérification du manifeste ne protège pas contre un dépôt ou un PC lui-même compromis. Conserver les sauvegardes localement, car elles incluent identifiants de l’appareil et réglages réseau. Le dépôt public et les ZIP de distribution les excluent.

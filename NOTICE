@@ -1,0 +1,10 @@
+Xiaomi Clean Home is an independent community derivative of CleanYourTV 2.7.0.
+Upstream: https://github.com/Gathin23/cleanyourtv
+Upstream copyright (c) 2026 Gathin. MIT license retained in LICENSE.
+Outfit fonts: SIL Open Font License, launcher/FONT-LICENSE-OFL.txt.
+
+Changes: horizontal row home, compatible Android TV content previews, local
+HTTPS photo administration, photo styles and centered framing, deduplication,
+landscape 16:9 imports, device-specific reversible installer and build tooling.
+macOS-inspired photo styles are original adaptations, not Apple code/assets.
+No Xiaomi, Google, streaming-service or Apple affiliation is implied.

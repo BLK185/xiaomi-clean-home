@@ -1,0 +1,14 @@
+{
+  "id": "xiaomi-soul-android11",
+  "label": "Xiaomi TV Stick 4K — MiTV-AYFR0 — Android 11",
+  "match": {"manufacturer": "Xiaomi", "model": "MiTV-AYFR0", "device": "soul", "sdk": 30},
+  "keep": ["com.netflix.ninja", "com.amazon.amazonvideo.livingroom", "com.google.android.youtube.tv", "fr.tf1.mytf1", "org.jellyfin.androidtv"],
+  "disable": [
+    "com.mitv.tvhome.atv", "com.mitv.tvhome.mitvplus", "com.mitv.tvhome.michannel", "com.xm.webcontent",
+    "com.google.android.tvrecommendations", "com.miui.tv.analytics", "com.xiaomi.statistic",
+    "com.google.android.tvlauncher", "com.google.android.youtube.tvmusic", "com.google.android.videos",
+    "com.wakanim.androidtv", "ch.protonvpn.android", "com.google.android.play.games", "com.mitv.videoplayer",
+    "com.spocky.projengmenu", "com.xiaomi.mitv.smartshare", "com.xiaomi.wfdsinkhelperservice",
+    "com.mitv.dream", "com.android.printspooler", "com.google.android.feedback"
+  ]
+}
