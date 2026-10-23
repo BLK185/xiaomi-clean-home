@@ -28,9 +28,11 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'Compilation ou tests en echec.' }
     } finally { Pop-Location }
     New-Item -ItemType Directory -Force -Path "$root/dist" | Out-Null
-    $name = 'xiaomi-clean-home-1.0.0.apk'
+    $version = [regex]::Match((Get-Content -Raw "$root/launcher/app/build.gradle"), "versionName '([^']+)'").Groups[1].Value
+    if (!$version) { throw 'Version Android illisible.' }
+    $name = "xiaomi-clean-home-$version.apk"
     Copy-Item -LiteralPath "$root/launcher/app/build/outputs/apk/release/app-release.apk" -Destination "$root/dist/$name" -Force
-    @{version='1.0.0'; apk=$name; sha256=(Get-FileHash -LiteralPath "$root/dist/$name" -Algorithm SHA256).Hash.ToLower(); application_id='io.github.blk185.xiaomicleanhome'} | ConvertTo-Json | Set-Content -LiteralPath "$root/release-manifest.json" -Encoding utf8
+    @{version=$version; apk=$name; sha256=(Get-FileHash -LiteralPath "$root/dist/$name" -Algorithm SHA256).Hash.ToLower(); application_id='io.github.blk185.xiaomicleanhome'} | ConvertTo-Json | Set-Content -LiteralPath "$root/release-manifest.json" -Encoding utf8
 } finally {
     Remove-Item Env:TVHOME_STORE_PASSWORD, Env:TVHOME_KEY_PASSWORD -ErrorAction SilentlyContinue
 }

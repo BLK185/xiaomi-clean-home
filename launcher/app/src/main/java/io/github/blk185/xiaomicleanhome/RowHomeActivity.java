@@ -133,6 +133,7 @@ public final class RowHomeActivity extends Activity {
         int hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY);
         ((TextView)findViewById(R.id.greeting)).setText(hour >= 18 || hour < 6 ? "Bonsoir" : "Bonjour");
         refresh(selected);
+        previews.warm(order);
         resetIdle();
         requestPreviewPermission(false);
     }

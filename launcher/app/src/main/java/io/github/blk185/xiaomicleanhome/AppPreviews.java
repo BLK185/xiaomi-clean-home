@@ -20,6 +20,15 @@ import android.widget.TextView;
 import android.widget.VideoView;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.security.MessageDigest;
+import java.util.Map;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.concurrent.ConcurrentHashMap;
+import android.os.SystemClock;
+import android.os.CancellationSignal;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
@@ -37,19 +46,39 @@ final class AppPreviews {
     private final View scrim;
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final ExecutorService worker=Executors.newFixedThreadPool(2);
-    private final LruCache<String,Bitmap> artwork=new LruCache<>(4);
+    private final LruCache<String,Bitmap> artwork=new LruCache<String,Bitmap>(24*1024*1024) {
+        @Override protected int sizeOf(String key,Bitmap value){return value.getAllocationByteCount();}
+    };
+    private final Map<String,List<Program>> listings=new ConcurrentHashMap<>();
+    private final Map<String,Long> listingTimes=new ConcurrentHashMap<>();
+    private final Map<String,Program> best=new ConcurrentHashMap<>();
+    private final Map<String,java.util.concurrent.CompletableFuture<Bitmap>> inFlight=new ConcurrentHashMap<>();
+    private final ExecutorService warmer=Executors.newSingleThreadExecutor();
+    private final File disk;
+    private volatile Task foreground,background;
+    private Runnable warm;
+    private volatile int warmGeneration;
+    private static final class Task {
+        final CancellationSignal signal=new CancellationSignal();
+        volatile boolean cancelled;
+        volatile HttpURLConnection connection;
+        void cancel(){cancelled=true;signal.cancel();HttpURLConnection c=connection;if(c!=null)c.disconnect();}
+        boolean stopped(){return cancelled||Thread.currentThread().isInterrupted();}
+    }
     private volatile int generation;
-    private boolean resumed;
-    private String focused;
+    private volatile boolean resumed;
+    private volatile String focused;
     private Runnable load;
     private Runnable videoTimeout;
 
     static final class Program {
         String title,poster,video;
+        int aspect=-1,type=-1;
     }
 
     AppPreviews(Activity activity) {
         this.activity=activity;
+        disk=new File(activity.getCacheDir(),"preview-art-v2");disk.mkdirs();
         poster=activity.findViewById(R.id.heroArt);
         poster.setScaleType(ImageView.ScaleType.CENTER_CROP);
         caption=activity.findViewById(R.id.heroMeta);
@@ -66,49 +95,115 @@ final class AppPreviews {
     }
 
     void resume() { resumed=true; }
-    void pause() { resumed=false; clear(); }
-    void close() { pause(); worker.shutdownNow(); artwork.evictAll(); }
+    void pause() {
+        resumed=false; warmGeneration++; clear();
+        if(warm!=null)handler.removeCallbacks(warm);
+        if(background!=null)background.cancel();
+    }
+    void close() { pause(); worker.shutdownNow(); warmer.shutdownNow(); artwork.evictAll(); }
+
+    void warm(List<String> packages) {
+        if(activity.getSharedPreferences("home_previews",0).getString("mode","auto").equals("off")
+            ||activity.checkSelfPermission(PERMISSION)!=PackageManager.PERMISSION_GRANTED)return;
+        if(warm!=null)handler.removeCallbacks(warm);
+        final int warmTicket=++warmGeneration;
+        List<String> copy=new ArrayList<>(packages);
+        // Local content providers may themselves fetch remote artwork slowly. Prepare HTTP-backed
+        // streaming apps first so one such provider cannot delay every other app's first preview.
+        copy.sort(Comparator.comparingInt(p->p.equals("org.jellyfin.androidtv")?1:0));
+        warm=()->warmer.execute(()->{
+            for(String pkg:copy){
+                if(!resumed||warmTicket!=warmGeneration||Thread.currentThread().isInterrupted())return;
+                if(pkg.equals(focused)||hasCached(pkg))continue;
+                Task task=new Task();background=task;
+                loadBest(pkg,task,-1,false);
+            }
+        });
+        handler.postDelayed(warm,1200);
+    }
+    private boolean hasCached(String pkg){Program p=best.get(pkg);return p!=null&&artwork.get(p.poster)!=null;}
 
     void select(String pkg) {
         focused=pkg;
         clear();
         String mode=activity.getSharedPreferences("home_previews",0).getString("mode","auto");
+        if(mode.equals("off")){
+            warmGeneration++;
+            if(warm!=null)handler.removeCallbacks(warm);
+            if(background!=null)background.cancel();
+        }
         if (!resumed || pkg==null || mode.equals("off")
             || activity.checkSelfPermission(PERMISSION)!=PackageManager.PERMISSION_GRANTED) return;
         final int ticket=generation;
-        load=() -> worker.execute(() -> {
-            List<Program> programs=read(pkg);
-            Program chosen=null;
-            if(mode.equals("auto")) for(Program item:programs) if(https(item.video)){chosen=item;break;}
-            if(chosen==null) for(Program item:programs) if(readable(item.poster)){chosen=item;break;}
-            final Program program=chosen;
-            Bitmap image=program==null?null:readPoster(program.poster);
-            handler.post(() -> {
-                if(ticket!=generation || !resumed || program==null) return;
-                caption.setText(program.title==null?"":program.title);
-                caption.setVisibility(View.VISIBLE);
-                if(image!=null) {
-                    poster.setImageBitmap(image); poster.setVisibility(View.VISIBLE);
-                    poster.setAlpha(0f); poster.animate().alpha(0.65f).setDuration(350).start();
-                    scrim.setVisibility(View.VISIBLE);
-                }
-                if(mode.equals("auto") && https(program.video)) play(program.video,ticket);
-            });
-        });
-        handler.postDelayed(load,800);
+        Program cached=best.get(pkg);
+        Bitmap image=cached==null?null:artwork.get(cached.poster);
+        if(image!=null){
+            display(cached,image,ticket,mode.equals("auto"),0);
+            Long last=listingTimes.get(pkg);
+            if(last!=null&&SystemClock.elapsedRealtime()-last<120000)return;
+        }
+        Task task=new Task();foreground=task;
+        load=()->worker.execute(()->loadBest(pkg,task,ticket,mode.equals("auto")));
+        handler.postDelayed(load,120);
     }
 
-    private List<Program> read(String pkg) {
+    private void loadBest(String pkg,Task task,int ticket,boolean auto) {
+        if(task.stopped()||!resumed)return;
+        long started=SystemClock.elapsedRealtime();
+        List<Program> programs=read(pkg,task);
+        if(task.stopped())return;
+        List<Program> ranked=new ArrayList<>(programs);
+        ranked.sort(Comparator.comparingInt((Program p)->PreviewArtwork.contentPriority(pkg,p.title,p.poster)+(PreviewArtwork.landscape(p.aspect)?100:0)+(auto&&https(p.video)?20:0)).reversed());
+        Program previous=best.get(pkg);
+        if(previous!=null&&programs.contains(previous))ranked.add(0,previous);
+        int quality=-1,attempts=0;boolean videoStarted=false;
+        for(Program p:ranked){
+            if(task.stopped()||!resumed||attempts++>=4)return;
+            Bitmap image=readPoster(p.poster,task);
+            if(image==null)continue;
+            int score=PreviewArtwork.fullBackdrop(image.getWidth(),image.getHeight())?10000000+image.getWidth()*image.getHeight():image.getWidth()*image.getHeight();
+            if(score<=quality)continue;
+            quality=score;best.put(pkg,p);
+            if(ticket>=0){
+                final boolean startVideo=auto&&!videoStarted;
+                if(startVideo&&https(p.video))videoStarted=true;
+                handler.post(()->display(p,image,ticket,startVideo,SystemClock.elapsedRealtime()-started));
+            }
+            if(PreviewArtwork.fullBackdrop(image.getWidth(),image.getHeight()))return;
+        }
+    }
+
+    private void display(Program program,Bitmap image,int ticket,boolean auto,long elapsed) {
+        if(ticket!=generation||!resumed)return;
+        caption.setText(program.title==null?"":program.title);caption.setVisibility(View.VISIBLE);
+        boolean backdrop=PreviewArtwork.fullBackdrop(image.getWidth(),image.getHeight());
+        poster.setScaleType(backdrop?ImageView.ScaleType.CENTER_CROP:ImageView.ScaleType.CENTER_INSIDE);
+        poster.setImageBitmap(image);poster.setVisibility(View.VISIBLE);poster.setAlpha(0.8f);
+        scrim.setVisibility(View.VISIBLE);
+        Log.i("HomePreviews","ready "+focused+" "+image.getWidth()+"x"+image.getHeight()+" in "+elapsed+"ms");
+        if(auto&&https(program.video))play(program.video,ticket);
+    }
+
+    private List<Program> read(String pkg,Task task) {
+        Long last=listingTimes.get(pkg);
+        if(last!=null&&SystemClock.elapsedRealtime()-last<120000)return listings.get(pkg);
         List<Program> result=new ArrayList<>();
-        String[] columns={"package_name","title","poster_art_uri","preview_video_uri"};
+        String[] columns={"package_name","title","poster_art_uri","preview_video_uri","poster_art_aspect_ratio","thumbnail_uri","poster_thumbnail_aspect_ratio","type"};
         for(String table:new String[]{"preview_program","watch_next_program"}) {
-            try(Cursor cursor=activity.getContentResolver().query(Uri.parse("content://android.media.tv/"+table),columns,null,null,null)) {
+            try(Cursor cursor=activity.getContentResolver().query(Uri.parse("content://android.media.tv/"+table),columns,null,null,null,task.signal)) {
                 if(cursor==null) continue;
                 int scanned=0;
-                while(cursor.moveToNext() && scanned++<2000 && result.size()<60) {
+                while(!task.stopped() && cursor.moveToNext() && scanned++<2000 && result.size()<60) {
                     if(!pkg.equals(cursor.getString(0))) continue;
                     Program item=new Program(); item.title=cursor.getString(1); item.poster=cursor.getString(2); item.video=cursor.getString(3);
+                    item.aspect=cursor.isNull(4)?-1:cursor.getInt(4);item.type=cursor.isNull(7)?-1:cursor.getInt(7);
                     if(readable(item.poster)||https(item.video)) result.add(item);
+                    String thumbnail=cursor.getString(5);
+                    if(readable(thumbnail)&&!thumbnail.equals(item.poster)){
+                        Program alternative=new Program();alternative.title=item.title;alternative.video=item.video;alternative.type=item.type;
+                        alternative.poster=thumbnail;alternative.aspect=cursor.isNull(6)?-1:cursor.getInt(6);result.add(alternative);
+                    }
+                    if(result.size()<=3)Log.i("HomePreviews","source "+pkg+" aspect="+item.aspect+" host="+(item.poster==null?"none":Uri.parse(item.poster).getHost()));
                 }
             } catch(SecurityException e) { Log.i("HomePreviews",pkg+" : provider access restricted"); }
               catch(Exception e) { Log.i("HomePreviews",pkg+" : provider unavailable"); }
@@ -117,6 +212,7 @@ final class AppPreviews {
         for(Program item:result){if(https(item.video)) videos++;if(readable(item.poster)) posters++;}
         Log.i("HomePreviews",pkg+" programmes="+result.size()+" videos="+videos+" affiches="+posters);
         activity.getSharedPreferences("home_previews",0).edit().putInt("posters_"+pkg,posters).putInt("videos_"+pkg,videos).apply();
+        if(!task.stopped()){listings.put(pkg,result);listingTimes.put(pkg,SystemClock.elapsedRealtime());}
         return result;
     }
 
@@ -132,16 +228,62 @@ final class AppPreviews {
         return https(value)||"content".equals(scheme)||"android.resource".equals(scheme);
     }
 
-    private Bitmap readPoster(String uri) {
-        if(!readable(uri)) return null;
+    private Bitmap readPoster(String uri,Task task) {
+        if(uri!=null){Bitmap cached=artwork.get(uri);if(cached!=null)return cached;}
+        String high=PreviewArtwork.highResolution(uri);
+        if(high!=null&&!high.equals(uri)){
+            Bitmap upgraded=fetchPoster(high,task);
+            if(upgraded!=null&&upgraded.getWidth()>=960){artwork.put(uri,upgraded);return upgraded;}
+        }
+        return fetchPoster(uri,task);
+    }
+
+    private File cachedFile(String uri)throws Exception{
+        StringBuilder key=new StringBuilder();
+        for(byte b:MessageDigest.getInstance("SHA-256").digest(uri.getBytes(java.nio.charset.StandardCharsets.UTF_8)))key.append(String.format(java.util.Locale.ROOT,"%02x",b&255));
+        return new File(disk,key+".art");
+    }
+    private void cacheBytes(File target,byte[] bytes){
+        try{
+            File temp=File.createTempFile("pending-",".art",disk);
+            try(FileOutputStream output=new FileOutputStream(temp)){output.write(bytes);}
+            if(!temp.renameTo(target))temp.delete();
+            File[] files=disk.listFiles();if(files==null)return;
+            java.util.Arrays.sort(files,Comparator.comparingLong(File::lastModified));
+            long total=0;for(File f:files)total+=f.length();
+            for(int i=0;i<files.length&&(total>24L*1024*1024||i<files.length-16);i++){total-=files[i].length();files[i].delete();}
+        }catch(Exception ignored){}
+    }
+
+    private Bitmap fetchPoster(String uri,Task task) {
+        if(task.stopped()||!readable(uri))return null;
+        Bitmap cached=artwork.get(uri);if(cached!=null)return cached;
+        java.util.concurrent.CompletableFuture<Bitmap> result=new java.util.concurrent.CompletableFuture<>();
+        java.util.concurrent.CompletableFuture<Bitmap> existing=inFlight.putIfAbsent(uri,result);
+        if(existing!=null){
+            while(!task.stopped())try{return existing.get(50,java.util.concurrent.TimeUnit.MILLISECONDS);}
+            catch(java.util.concurrent.TimeoutException waiting){}
+            catch(Exception interrupted){return null;}
+            return null;
+        }
+        try{Bitmap image=fetchPosterRaw(uri,task);result.complete(image);return image;}
+        finally{result.complete(null);inFlight.remove(uri,result);}
+    }
+
+    private Bitmap fetchPosterRaw(String uri,Task task) {
+        if(task.stopped()||!readable(uri)) return null;
         Bitmap cached=artwork.get(uri);
         if(cached!=null) return cached;
         HttpURLConnection connection=null;
         try {
+            File saved=cachedFile(uri);
             InputStream input;
-            if(https(uri)) {
+            boolean fromDisk=saved.isFile()&&System.currentTimeMillis()-saved.lastModified()<86400000L;
+            if(fromDisk)input=new java.io.FileInputStream(saved);
+            else if(https(uri)) {
                 connection=(HttpURLConnection)new URL(uri).openConnection();
-                connection.setConnectTimeout(3500); connection.setReadTimeout(4500);
+                task.connection=connection;
+                connection.setConnectTimeout(1800); connection.setReadTimeout(1800);
                 connection.setInstanceFollowRedirects(false);
                 if(connection.getResponseCode()!=200) return null;
                 input=connection.getInputStream();
@@ -151,18 +293,18 @@ final class AppPreviews {
             try(InputStream stream=input;ByteArrayOutputStream output=new ByteArrayOutputStream()) {
                 byte[] buffer=new byte[16384];
                 for(int n;(n=stream.read(buffer))>=0;) {
-                    if(output.size()+n>8*1024*1024) return null;
+                    if(task.stopped()||output.size()+n>8*1024*1024) return null;
                     output.write(buffer,0,n);
                 }
                 bytes=output.toByteArray();
             }
+            if(task.stopped())return null;
             BitmapFactory.Options info=new BitmapFactory.Options();info.inJustDecodeBounds=true;
             BitmapFactory.decodeByteArray(bytes,0,bytes.length,info);
             if(info.outWidth<1||info.outHeight<1) return null;
-            BitmapFactory.Options options=new BitmapFactory.Options();options.inSampleSize=1;
-            while((long)(info.outWidth/options.inSampleSize)*(info.outHeight/options.inSampleSize)>1500000) options.inSampleSize*=2;
+            BitmapFactory.Options options=new BitmapFactory.Options();options.inSampleSize=PreviewArtwork.sample(info.outWidth,info.outHeight);
             Bitmap bitmap=BitmapFactory.decodeByteArray(bytes,0,bytes.length,options);
-            if(bitmap!=null) artwork.put(uri,bitmap);
+            if(bitmap!=null&&!task.stopped()){artwork.put(uri,bitmap);if(!fromDisk)cacheBytes(saved,bytes);}
             return bitmap;
         } catch(Exception|OutOfMemoryError e) { return null; }
         finally { if(connection!=null) connection.disconnect(); }
@@ -200,6 +342,7 @@ final class AppPreviews {
 
     private void clear() {
         generation++;
+        if(foreground!=null){foreground.cancel();foreground=null;}
         if(load!=null) handler.removeCallbacks(load);
         if(videoTimeout!=null) handler.removeCallbacks(videoTimeout);
         video.setOnPreparedListener(null);video.setOnInfoListener(null);video.setOnErrorListener(null);video.setOnCompletionListener(null);

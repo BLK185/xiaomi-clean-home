@@ -8,7 +8,7 @@ Un accueil Android TV épuré, une veille photo administrée en HTTPS et un inst
 
 1. Sur la Xiaomi neuve, terminer la configuration Android TV : Wi-Fi, compte Google et mises à jour. La laisser sur son réseau local habituel.
 2. Dans **Paramètres → Préférences de l’appareil → À propos**, appuyer sept fois sur **Build**. Dans **Options pour les développeurs**, activer **Débogage USB**. Relever l’adresse IPv4 dans les paramètres réseau.
-3. Télécharger `xiaomi-clean-home-1.0.0-windows.zip` dans les Releases, puis **extraire tout le ZIP** dans un dossier conservé sur le PC.
+3. Télécharger le ZIP `xiaomi-clean-home-VERSION-windows.zip` de la dernière Release, puis **extraire tout le ZIP** dans un dossier conservé sur le PC.
 4. Double-cliquer sur **Install.cmd**, saisir l’IP et accepter la clé ADB affichée sur la TV. Si la connexion a été refusée avant cette validation, relancer le script. Lire puis accepter le plan présenté sur le PC.
 5. Le script sauvegarde l’état d’origine, installe l’APK signé, vérifie le nouvel accueil avant le nettoyage, redémarre et contrôle son démarrage. Il demande ensuite la fermeture du débogage. Vérifier sur la TV qu’il est désactivé, puis tester Chromecast avec image et son.
 

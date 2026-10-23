@@ -1,6 +1,6 @@
 {
-  "sha256": "95ace7624641756c03939ee22abf6112bd68c48652d631b222c190759dc3ed2e",
-  "version": "1.0.0",
-  "apk": "xiaomi-clean-home-1.0.0.apk",
-  "application_id": "io.github.blk185.xiaomicleanhome"
+  "application_id": "io.github.blk185.xiaomicleanhome",
+  "apk": "xiaomi-clean-home-1.0.1.apk",
+  "sha256": "7f6f392d7df4281458b20e58ba28369a188cd4477e7d9ebff883145d67ebf6d8",
+  "version": "1.0.1"
 }
