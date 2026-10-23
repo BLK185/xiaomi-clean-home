@@ -109,11 +109,8 @@ public final class RowHomeActivity extends Activity {
         hint.setGravity(Gravity.CENTER);
         FrameLayout.LayoutParams hlp = new FrameLayout.LayoutParams(-1, dp(32), Gravity.BOTTOM);
         space.addView(hint, hlp);
-        scroll.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob) -> {
-            int[] position = new int[2];
-            scroll.getLocationOnScreen(position);
-            hero.setY(position[1] - dp(88));
-        });
+        scroll.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob) -> positionHeroAboveDock());
+        hero.addOnLayoutChangeListener((v,l,t,r,b,ol,ot,or,ob) -> positionHeroAboveDock());
         setupHeader();
         previews = new AppPreviews(this);
         IntentFilter filter = new IntentFilter();
@@ -124,6 +121,13 @@ public final class RowHomeActivity extends Activity {
         if (Build.VERSION.SDK_INT >= 33) registerReceiver(changes, filter, Context.RECEIVER_NOT_EXPORTED);
         else registerReceiver(changes, filter);
         registered = true;
+    }
+
+    private void positionHeroAboveDock() {
+        int[] dock = new int[2], parent = new int[2];
+        scroll.getLocationInWindow(dock);
+        ((View)hero.getParent()).getLocationInWindow(parent);
+        hero.setY(dock[1] - parent[1] - hero.getHeight() - dp(18));
     }
 
     @Override protected void onResume() {

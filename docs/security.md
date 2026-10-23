@@ -1,5 +1,7 @@
 # Sécurité et limites
 
+Les aperçus HD TF1 et Netflix consultent leurs pages publiques officielles sans compte, cookie d’authentification ou mot de passe. Netflix reçoit uniquement l’identifiant du titre à afficher sur sa propre page. Aucun site de métadonnées tiers n’est utilisé et les scripts des pages ne sont pas exécutés. Seuls les hôtes HTTPS autorisés sont acceptés ; les images doivent appartenir aux CDN de l’éditeur. Les correspondances sont mises en cache localement ; un échec conserve l’aperçu Android TV existant.
+
 Le site photo écoute sur le réseau local en HTTPS, port 8765, uniquement lorsque l’écran de partage de la TV est ouvert. Il utilise TLS 1.2/1.3 et une clé EC générée dans AndroidKeyStore. Le certificat est local et auto-signé : comparer son empreinte sur la TV avant d’accepter l’exception du navigateur. Le chiffrement seul ne prouve pas l’identité du serveur sans cette vérification.
 
 L’autorisation se fait sur la TV, avec code et adresse du demandeur. Aucun mot de passe permanent n’est envoyé. Une seule demande ou session est admise ; le ticket de demande expire après deux minutes, les demandes sont espacées de quinze secondes. Le navigateur reçoit un identifiant aléatoire dans un cookie Secure, HttpOnly, SameSite=Strict, lié à son adresse IP, ainsi qu’un jeton CSRF. Les opérations modifiant les données vérifient l’origine et le jeton. L’inactivité ferme la session après quinze minutes, sa durée absolue est de deux heures. La fermeture de l’écran et la révocation détruisent la session en mémoire.
